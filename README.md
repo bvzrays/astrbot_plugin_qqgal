@@ -4,7 +4,8 @@ GalGame 风格“选项生成 + 图片渲染”插件（AstrBot 框架，Napcat/
 
 ⚠️正在优化渲染和提示词，目前正常使用但有些简陋
 > 将聊天中的“引用消息”作为语境，调用 AstrBot 已配置的大模型生成 A/B/C… 选项，并以 GalGame UI 风格渲染为图片：
-![9f8adc1b2345898288291ac20b7b28a2](https://github.com/user-attachments/assets/ac3a0812-4fe5-4e2c-94c4-42b1822396d3)
+<img width="426" height="414" alt="image" src="https://github.com/user-attachments/assets/815b9756-8955-469c-847a-3b9f55f5e468" />
+
 ![6b7969fe97e8fd271e9357f09a1a5624](https://github.com/user-attachments/assets/8d914ddb-a6d6-4388-bc50-821bea0e1c70)
 ## 功能特性 ✨
 - 生成 GalGame 风格的下一步选项（数量可自定义）。
