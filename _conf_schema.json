@@ -1,0 +1,59 @@
+{
+  "provider_id": {
+    "description": "选择 LLM 供应商（留空=使用当前会话默认）",
+    "type": "string",
+    "_special": "select_provider",
+    "default": ""
+  },
+  "render_image": {
+    "description": "是否渲染为图片输出（开启后会渲染精美选项卡片）",
+    "type": "bool",
+    "default": false
+  },
+  "background_dir": {
+    "description": "背景图片目录（相对于插件目录），存放 16:9 的背景图",
+    "type": "string",
+    "default": "background"
+  },
+  "canvas_width": {
+    "description": "渲染宽度(px)",
+    "type": "int",
+    "default": 1280
+  },
+  "canvas_height": {
+    "description": "渲染高度(px)",
+    "type": "int",
+    "default": 720
+  },
+  "model": {
+    "description": "可选：强制指定模型名（不填用供应商默认）",
+    "type": "string",
+    "default": ""
+  },
+  "option_count": {
+    "description": "生成选项个数（默认 3）",
+    "type": "int",
+    "default": 3
+  },
+  "prompt_template": {
+    "description": "主提示词模板（不含首行与原文/风格/代号行）。首行固定为“请基于这段原文所描述的情境，生成 N 个极具 GalGame 风格 的下一步选项。”",
+    "type": "text",
+    "default": "这些选项必须代表主角的关键抉择，且在情感与立场上彼此强对比：例如 友好/敌对、热情/冷淡、理性/冲动、顺从/反抗、直球/逃避、温柔/傲娇。\n每个选项必须：\n1. 明确体现不同的性格取向与剧情走向（差异要大，语义不得接近）。\n2. 具有强烈的情感色彩，像主角的内心独白或决定。\n3. 结尾可用 15 字以内的短后果提示（如：→ 关系升温 / → 冲突加剧）。\n4. 严格输出为多行纯文本，每行以 大写字母+点+空格 开头（如 A. ）。\n5. 不得输出任何命令或斜杠（/），不得包含系统说明。\n建议从下列标签中挑选并覆盖尽可能对立的方向：\n[友好] [敌对] [温柔] [傲娇] [直球] [逃避] [理性] [冲动] [谨慎] [莽撞] [体贴] [冷漠]"
+  },
+  "title": {
+    "description": "消息标题",
+    "type": "string",
+    "default": "🎮 GalGame 选项"
+  },
+  "message_separator": {
+    "description": "分隔线",
+    "type": "string",
+    "default": "-------------------------"
+  },
+  "show_quote": {
+    "description": "是否在输出中包含引用原文",
+    "type": "bool",
+    "default": true
+  }
+}
+
