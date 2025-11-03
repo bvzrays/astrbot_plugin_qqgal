@@ -6,6 +6,7 @@ import astrbot.api.message_components as Comp
 from typing import Dict, Any, List
 import base64
 import mimetypes
+import html as html_lib
 import os
 import random
 
@@ -20,13 +21,14 @@ class QQGalPlugin(Star):
             base_dir = os.path.dirname(__file__)
             bg_dir = os.path.join(base_dir, str(self.cfg().get("background_dir", "background")))
             os.makedirs(bg_dir, exist_ok=True)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.error("[qqgal] init background dir failed: %s", e)
 
     def cfg(self) -> Dict[str, Any]:
         try:
             return self._cfg_obj if self._cfg_obj is not None else {}
-        except Exception:
+        except Exception as e:
+            logger.error("[qqgal] read config failed: %s", e)
             return {}
 
     async def _extract_quoted_text(self, event: AstrMessageEvent) -> str:
@@ -37,16 +39,17 @@ class QQGalPlugin(Star):
         """
         # 1) 文本参数
         try:
-            text = event.message_str or ""
-            for tok in ["/选项", "选项", "/gal", "gal", "/gal选项", "gal选项"]:
-                if text.startswith(tok):
-                    text = text[len(tok):].strip()
+            text = (event.message_str or "").strip()
+            prefixes = ("/选项", "选项", "/gal", "gal", "/gal选项", "gal选项")
+            for p in prefixes:
+                if text.startswith(p):
+                    text = text[len(p):].strip()
                     break
             if text:
                 logger.debug(f"[qqgal] using inline text as base_text, len={len(text)}")
                 return text
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("[qqgal] parse inline text failed", exc_info=True)
 
         # 2) 引用消息（OneBot v11）
         try:
@@ -87,7 +90,7 @@ class QQGalPlugin(Star):
                         logger.debug("[qqgal] get_msg failed", exc_info=True)
                         pass
         except Exception:
-            pass
+            logger.debug("[qqgal] parse reply text failed", exc_info=True)
         return ""
 
     def _letters(self, n: int) -> List[str]:
@@ -236,7 +239,7 @@ class QQGalPlugin(Star):
                                 break
 
         except Exception:
-            pass
+            logger.debug("[qqgal] parse target for avatar failed", exc_info=True)
 
         # 3) 触发者自身
         if not target_id:
@@ -244,7 +247,8 @@ class QQGalPlugin(Star):
         if not target_name:
             target_name = event.get_sender_name() or target_id
 
-        avatar = f"https://q1.qlogo.cn/g?b=qq&nk={target_id}&s=640"
+        avatar_tmpl = str(self.cfg().get("avatar_url_tmpl", "https://q1.qlogo.cn/g?b=qq&nk={qq}&s=640"))
+        avatar = avatar_tmpl.replace("{qq}", target_id)
         display = f"{target_name} ({target_id})"
         return display, avatar
 
@@ -258,7 +262,8 @@ class QQGalPlugin(Star):
                 return ""
             choice = random.choice(files)
             return os.path.join(dirp, choice)
-        except Exception:
+        except Exception as e:
+            logger.debug("[qqgal] pick background failed: %s", e)
             return ""
 
     def _data_url(self, path: str) -> str:
@@ -268,7 +273,8 @@ class QQGalPlugin(Star):
             with open(path, "rb") as f:
                 b64 = base64.b64encode(f.read()).decode("ascii")
             return f"data:{mime};base64,{b64}"
-        except Exception:
+        except Exception as e:
+            logger.debug("[qqgal] data_url encode failed: %s", e)
             return ""
 
     async def _render_image(self, event: AstrMessageEvent, quote: str, options: List[str]) -> str:
@@ -295,8 +301,13 @@ class QQGalPlugin(Star):
         glass_top = quote_top
         glass_h = max(120, height - glass_top)
 
+        # 对外部/用户内容进行 HTML 转义，避免注入
+        safe_name = html_lib.escape(name)
+        safe_quote = html_lib.escape(quote)
+        safe_options = [html_lib.escape(opt) for opt in options]
+
         # 构建 HTML 模板
-        html = f"""
+        html_doc = f"""
 <html>
 <head>
 <meta charset='utf-8'/>
@@ -312,8 +323,8 @@ class QQGalPlugin(Star):
   .quote {{ position:absolute; left:50%; transform:translateX(-50%); top:{quote_top}px; width:var(--quote-width); padding:18px 22px 22px 22px; color:#fff; font-size:28px; font-weight:800; line-height:1.5; border-radius:16px; background:transparent; text-align:center; }}
   .glass {{ position:absolute; left:{glass_left}px; top:{glass_top}px; width:{glass_w}px; height:{glass_h}px; background:rgba(0,0,0,.25); backdrop-filter: blur(10px); border-radius:18px; box-shadow:0 10px 30px rgba(0,0,0,.35); }}
   .q-avatar {{ position:absolute; left:16px; top:16px; width:56px; height:56px; border-radius:50%; border:2px solid rgba(255,255,255,.8); background-image:url('{avatar}'); background-size:cover; background-position:center; box-shadow:0 4px 12px rgba(0,0,0,.4); }}
-  .q-user {{ position:absolute; left:88px; top:22px; font-size:22px; font-weight:800; text-shadow:0 2px 6px rgba(0,0,0,.6); }}
-  .q-text {{ margin-top:88px; font-size:32px; font-weight:900; text-align:center; line-height:1.6; }}
+  .q-user {{ position:absolute; left:88px; top:22px; font-size:22px; font-weight:800; color:#fff; text-shadow:0 2px 6px rgba(0,0,0,.6); }}
+  .q-text {{ margin-top:88px; font-size:32px; font-weight:900; color:#fff; text-align:center; line-height:1.6; }}
   .option {{ position:absolute; left:50%; transform:translateX(-50%); width:{int(width*0.7)}px; padding:14px 18px; background:rgba(0,0,0,.55); color:#f0f0f0; border-radius:28px; text-align:center; font-size:26px; font-weight:800; letter-spacing:1px; box-shadow:0 8px 20px rgba(0,0,0,.35); border:1px solid rgba(255,255,255,.15); }}
   /* 将选项整体上移，集中在画面上 2/5 区域附近 */
   .opt1 {{ top:{opt1_top}px; }}
@@ -330,10 +341,10 @@ class QQGalPlugin(Star):
     <div class='glass'></div>
     <div class='quote'>
       <div class='q-avatar'></div>
-      <div class='q-user'>{name}</div>
-      <div class='q-text'>{quote}</div>
+      <div class='q-user'>{safe_name}</div>
+      <div class='q-text'>{safe_quote}</div>
     </div>
-    {''.join([f"<div class='option opt{i+1}'>"+opt+"</div>" for i,opt in enumerate(options)])}
+    {''.join([f"<div class='option opt{i+1}'>"+opt+"</div>" for i,opt in enumerate(safe_options)])}
   </div>
 </body>
 </html>
@@ -345,7 +356,7 @@ class QQGalPlugin(Star):
         if quality > 100:
             quality = 100
         options_dict = {"type": "jpeg", "quality": quality}
-        url = await self.html_render(html, data={}, options=options_dict)
+        url = await self.html_render(html_doc, data={}, options=options_dict)
         return url
 
     def _parse_count_from_text(self, text: str, default_n: int, min_n: int, max_n: int) -> int:
@@ -372,6 +383,11 @@ class QQGalPlugin(Star):
     async def make_gal_options(self, event: AstrMessageEvent):
         """引用或跟随文本，生成 GalGame 风格选项。数量可选，默认 3。"""
         try:
+            # 标记本事件已由主指令处理，供 fallback 去重
+            try:
+                event.set_extra("qqgal_handled", True)
+            except Exception:
+                pass
             cfg = self.cfg()
             default_n = int(cfg.get("option_count", 3))
             # 从文本中解析数量（最后一个整数）；无则用默认；限制 1~26
@@ -408,18 +424,25 @@ class QQGalPlugin(Star):
         当文本中以 /选项、选项、/gal、gal 起始时，触发与命令相同的逻辑。
         """
         try:
+            # 若主指令已处理，直接跳过，防止重复发送
+            try:
+                if event.get_extra("qqgal_handled"):
+                    return
+            except Exception:
+                pass
             text = (event.message_str or "").strip()
             raw = text.lstrip('*').lstrip()
             prefixes = ("/选项", "选项", "/gal", "gal")
             if not any(raw.startswith(p) for p in prefixes):
                 return
-            # 调用与指令一致的处理
+            # 调用与指令一致的处理（make_gal_options 为 async generator，需要逐条转发其结果）
             logger.debug("[qqgal] fallback trigger matched, dispatch to make_gal_options")
-            await self.make_gal_options(event)
+            async for result in self.make_gal_options(event):
+                yield result
             # 阻断默认 LLM 回复
             event.stop_event()
         except Exception:
-            pass
+            logger.error("[qqgal] fallback handler failed", exc_info=True)
 
     async def terminate(self):
         pass
