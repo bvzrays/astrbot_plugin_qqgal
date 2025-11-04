@@ -4,6 +4,7 @@ from astrbot.api import logger
 import astrbot.api.message_components as Comp
 
 from typing import Dict, Any, List
+import asyncio
 import base64
 import mimetypes
 import html as html_lib
@@ -351,54 +352,49 @@ class QQGalPlugin(Star):
         except Exception:
             return ""
 
-    def _matte_chroma_dataurl(self, data_url: str, chroma: str, tol: int, qq: str) -> tuple[str, bool]:
-        """对 data-url 执行抠色：将接近 chroma 的背景转为透明。
-        - 使用颜色距离阈值（RGB 欧氏距离）以适应压缩/渐变
-        - 对边缘做轻微羽化，减少硬边
-        成功则落盘 qq-matte.png 并返回 data-url；失败回退原图。
-        """
+    def _matte_chroma_dataurl_sync(self, data_url: str, chroma: str, tol: int, qq: str) -> tuple[str, bool]:
+        """同步抠色实现：CPU 密集，供 to_thread 调用。"""
+        from PIL import Image, ImageFilter
+        if not data_url.startswith("data:"):
+            return data_url, data_url.startswith("data:image/png")
+        head, b64 = data_url.split(",", 1)
+        base64_bytes = base64.b64decode(b64)
+        img = Image.open(BytesIO(base64_bytes)).convert("RGBA")
+        hx = chroma.lstrip('#')
+        key = tuple(int(hx[i:i+2], 16) for i in (0,2,4))
+
+        thr2 = tol * tol
+        w, h = img.size
+        mask = Image.new('L', (w, h), 255)
+        px = img.load()
+        mk = mask.load()
+        for y in range(h):
+            for x in range(w):
+                r, g, b, a = px[x, y]
+                dr = r - key[0]
+                dg = g - key[1]
+                db = b - key[2]
+                if (dr*dr + dg*dg + db*db) <= thr2:
+                    mk[x, y] = 0
+        mask = mask.filter(ImageFilter.GaussianBlur(1.2))
+        r, g, b, alpha = img.split()
+        alpha = Image.eval(mask, lambda v: min(255, v))
+        img = Image.merge('RGBA', (r, g, b, alpha))
+
+        buf = BytesIO()
+        img.save(buf, format='PNG')
+        b64png = base64.b64encode(buf.getvalue()).decode('ascii')
+        final_url = f"data:image/png;base64,{b64png}"
         try:
-            from PIL import Image, ImageFilter
-            if not data_url.startswith("data:"):
-                return data_url, data_url.startswith("data:image/png")
-            head, b64 = data_url.split(",", 1)
-            base64_bytes = base64.b64decode(b64)
-            img = Image.open(BytesIO(base64_bytes)).convert("RGBA")
-            hx = chroma.lstrip('#')
-            key = tuple(int(hx[i:i+2], 16) for i in (0,2,4))
+            self._save_data_url_to_disk(final_url, qq, save_as_matte=True)
+        except Exception:
+            pass
+        return final_url, True
 
-            # 阈值平方（欧氏距离）
-            thr2 = tol * tol
-            w, h = img.size
-            # 构建抠像遮罩：接近 key 的像素设为 0，其他 255
-            mask = Image.new('L', (w, h), 255)
-            px = img.load()
-            mk = mask.load()
-            for y in range(h):
-                for x in range(w):
-                    r, g, b, a = px[x, y]
-                    dr = r - key[0]
-                    dg = g - key[1]
-                    db = b - key[2]
-                    if (dr*dr + dg*dg + db*db) <= thr2:
-                        mk[x, y] = 0
-            # 羽化边缘，避免硬锯齿
-            mask = mask.filter(ImageFilter.GaussianBlur(1.2))
-            # 应用遮罩到 alpha 通道
-            r, g, b, alpha = img.split()
-            # 将 alpha 与 mask 相乘（mask 越小越透明）
-            alpha = Image.eval(mask, lambda v: min(255, v))
-            img = Image.merge('RGBA', (r, g, b, alpha))
-
-            buf = BytesIO()
-            img.save(buf, format='PNG')
-            b64png = base64.b64encode(buf.getvalue()).decode('ascii')
-            final_url = f"data:image/png;base64,{b64png}"
-            try:
-                self._save_data_url_to_disk(final_url, qq, save_as_matte=True)
-            except Exception:
-                pass
-            return final_url, True
+    async def _matte_chroma_dataurl(self, data_url: str, chroma: str, tol: int, qq: str) -> tuple[str, bool]:
+        """异步封装：在独立线程执行抠色，避免阻塞事件循环。"""
+        try:
+            return await asyncio.to_thread(self._matte_chroma_dataurl_sync, data_url, chroma, tol, qq)
         except Exception:
             logger.error("[qqgal-生图] 抠色处理失败(缓存/回退路径)", exc_info=True)
             return data_url, ("data:image/png" in data_url)
@@ -433,7 +429,7 @@ class QQGalPlugin(Star):
                 logger.info("[qqgal-生图] 读取本地缓存立绘成功(未抠)，qq=%s，透明PNG=%s，开始补抠。", qq, str(is_png))
                 tol = int(cfg.get("chroma_tolerance", 80))
                 chroma = str(cfg.get("chroma_bg_color", "#00FF00"))
-                processed, is_png2 = self._matte_chroma_dataurl(cached, chroma, tol, qq)
+                processed, is_png2 = await self._matte_chroma_dataurl(cached, chroma, tol, qq)
                 return processed, is_png2
         keys_val = cfg.get("gemini_api_keys", [])
         api_keys = []
@@ -555,7 +551,7 @@ class QQGalPlugin(Star):
                             # 2) 抠色到 qq-matte.png 并删除 qq.png
                             tol = int(cfg.get("chroma_tolerance", 80))
                             chroma = str(cfg.get("chroma_bg_color", "#00FF00"))
-                            matte_url, _ = self._matte_chroma_dataurl(self._file_to_data_url(raw_fp), chroma, tol, qq)
+                            matte_url, _ = await self._matte_chroma_dataurl(self._file_to_data_url(raw_fp), chroma, tol, qq)
                             try:
                                 os.remove(raw_fp)
                             except Exception:
