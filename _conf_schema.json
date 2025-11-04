@@ -125,6 +125,16 @@
     "type": "int",
     "default": -300
   },
+  "character_canvas_size": {
+    "description": "立绘标准画布大小(px，建议 1024)",
+    "type": "int",
+    "default": 1024
+  },
+  "character_target_width_ratio": {
+    "description": "立绘在标准画布中的目标宽度占比(0.1~0.95)",
+    "type": "float",
+    "default": 0.55
+  },
 
   "prompt_template": {
     "description": "追加到系统提示后的模板（用于约束生成风格）",
@@ -150,4 +160,3 @@
     "default": true
   }
 }
-
