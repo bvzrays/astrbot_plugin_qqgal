@@ -353,8 +353,13 @@ class QQGalPlugin(Star):
             return ""
 
     def _matte_chroma_dataurl_sync(self, data_url: str, chroma: str, tol: int, qq: str) -> tuple[str, bool]:
-        """同步抠色实现：CPU 密集，供 to_thread 调用。"""
-        from PIL import Image, ImageFilter
+        """同步抠色实现：CPU 密集，供 to_thread 调用。
+        增强项：
+        - 采用欧氏距离阈值；
+        - 先腐蚀后高斯模糊，收掉 1~2px 的绿色边缘；
+        - 适度扩大透明区域，减少绿边影响居中与缩放。
+        """
+        from PIL import Image, ImageFilter, ImageChops
         if not data_url.startswith("data:"):
             return data_url, data_url.startswith("data:image/png")
         head, b64 = data_url.split(",", 1)
@@ -365,6 +370,7 @@ class QQGalPlugin(Star):
 
         thr2 = tol * tol
         w, h = img.size
+        # 初始为全不透明
         mask = Image.new('L', (w, h), 255)
         px = img.load()
         mk = mask.load()
@@ -376,6 +382,12 @@ class QQGalPlugin(Star):
                 db = b - key[2]
                 if (dr*dr + dg*dg + db*db) <= thr2:
                     mk[x, y] = 0
+        # 轻度腐蚀收边，去掉 1~2 像素绿边
+        try:
+            mask = mask.filter(ImageFilter.MinFilter(3))
+        except Exception:
+            pass
+        # 轻度羽化
         mask = mask.filter(ImageFilter.GaussianBlur(1.2))
         r, g, b, alpha = img.split()
         alpha = Image.eval(mask, lambda v: min(255, v))
@@ -402,7 +414,7 @@ class QQGalPlugin(Star):
     def _standardize_character_canvas_sync(self, data_url: str, size: int, width_ratio: float, bottom_pad: int, qq: str) -> str:
         """将抠好的人物立绘标准化到 size×size 透明画布中：
         - 等比放大到“左右对齐”（宽度=画布宽度），
-        - 水平居中（自然为 0），
+        - 基于轮廓质心做水平居中，避免人物偏一侧；
         - 底部对齐（人物底边贴近画布底边，允许上方溢出被裁切），
         以确保不同原图比例得到一致的最终合成尺寸。
         返回 data-url，并覆盖到 qq-matte.png。
@@ -413,19 +425,46 @@ class QQGalPlugin(Star):
         head, b64 = data_url.split(",", 1)
         img = Image.open(BytesIO(base64.b64decode(b64))).convert("RGBA")
         # 取非透明 bbox
-        bbox = img.split()[3].getbbox()
+        alpha = img.split()[3]
+        bbox = alpha.getbbox()
         if not bbox:
             return data_url
         crop = img.crop(bbox)
+        alpha_crop = alpha.crop(bbox)
         # 从底部往上等比放大：尽可能大但不裁切（contain），
         # 当任意边触达画布边框时停止放大。
         scale = min(size / max(1, crop.width), size / max(1, crop.height))
         new_w = max(1, int(crop.width * scale))
         new_h = max(1, int(crop.height * scale))
         crop = crop.resize((new_w, new_h), Image.LANCZOS)
+        alpha_crop = alpha_crop.resize((new_w, new_h), Image.LANCZOS)
+        # 计算轮廓质心，按质心居中
+        try:
+            # 质心 x：sum(x*mask)/sum(mask)
+            sum_w = 0
+            sum_xw = 0
+            px = alpha_crop.load()
+            for y in range(new_h):
+                row_sum = 0
+                row_xw = 0
+                for x in range(new_w):
+                    wv = px[x, y]
+                    if wv > 0:
+                        sum_w += wv
+                        sum_xw += wv * x
+            cx = (sum_xw / sum_w) if sum_w > 0 else (new_w / 2)
+        except Exception:
+            cx = new_w / 2
         # 粘贴到标准画布
         canvas = Image.new('RGBA', (size, size), (0,0,0,0))
-        x = (size - new_w) // 2
+        desired_cx = size / 2
+        shift = int(round(desired_cx - cx))
+        x = (size - new_w) // 2 + shift
+        # 约束不越界
+        if x < 0:
+            x = 0
+        if x > size - new_w:
+            x = size - new_w
         # 底部对齐，不裁切
         y = max(0, size - new_h - int(bottom_pad or 0))
         canvas.paste(crop, (x, y), crop)
