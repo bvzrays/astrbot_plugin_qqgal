@@ -662,7 +662,7 @@ class QQGalPlugin(Star):
   .topbar {{ position:absolute; left:24px; top:18px; color:#fff; font-weight:700; letter-spacing:1px; text-shadow:0 2px 6px rgba(0,0,0,.6); }}
   :root {{ --quote-width: {quote_w}px; }}
   /* 人物立绘：底部居中，宽度按比例缩放 */
-  .char {{ position:absolute; left:calc(50% + {int(cfg.get('character_x_offset', 0))}px); transform:translateX(-50%); bottom:{int(cfg.get('character_bottom_offset', 40))}px; width:{int(width*float(cfg.get('character_scale', 0.42)))}px; height:auto; object-fit:contain; {'' if char_is_png else 'mix-blend-mode: multiply;'} filter: drop-shadow(0 8px 24px rgba(0,0,0,.45)); opacity:{1.0 if char_url else 0}; z-index: 1; pointer-events:none; }}
+  .char {{ position:absolute; left:calc(50% + {int(cfg.get('character_x_offset', 0))}px); transform:translateX(-50%); bottom:{int(cfg.get('character_bottom_offset', 0))}px; width:{int(width*float(cfg.get('character_scale', 0.42)))}px; height:auto; object-fit:contain; {'' if char_is_png else 'mix-blend-mode: multiply;'} filter: drop-shadow(0 8px 24px rgba(0,0,0,.45)); opacity:{1.0 if char_url else 0}; z-index: 1; pointer-events:none; }}
   /* 引用内容容器：自身不加毛玻璃，由下方 .glass 提供延伸到底部的模糊背景 */
   .quote {{ position:absolute; left:50%; transform:translateX(-50%); top:{quote_top}px; width:var(--quote-width); padding:18px 22px 22px 22px; color:#fff; font-size:28px; font-weight:800; line-height:1.5; border-radius:16px; background:transparent; text-align:center; z-index:3; }}
   .glass {{ position:absolute; left:{glass_left}px; top:{glass_top}px; width:{glass_w}px; height:{glass_h}px; background:rgba(0,0,0,.25); backdrop-filter: blur(10px); border-radius:18px; box-shadow:0 10px 30px rgba(0,0,0,.35); z-index:2; }}
