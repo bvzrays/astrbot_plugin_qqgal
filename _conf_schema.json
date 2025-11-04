@@ -113,7 +113,7 @@
   "character_scale": {
     "description": "人物宽度占画布比例（0.1~1.0）",
     "type": "float",
-    "default": 0.42
+    "default": 0.6
   },
   "character_bottom_offset": {
     "description": "人物底部距离画布底边(px)",
@@ -160,3 +160,4 @@
     "default": true
   }
 }
+
