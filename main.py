@@ -9,6 +9,8 @@ import mimetypes
 import html as html_lib
 import os
 import random
+import aiohttp
+from io import BytesIO
 
 
 @register("astrbot_plugin_qqgal", "bvzrays", "引用文本生成 GalGame 风格选项", "1.0.0")
@@ -196,7 +198,7 @@ class QQGalPlugin(Star):
         # 只保留 n 行
         return "\n".join(result[:n])
 
-    async def _get_display_and_avatar(self, event: AstrMessageEvent) -> tuple[str, str]:
+    async def _get_display_and_avatar(self, event: AstrMessageEvent) -> tuple[str, str, str]:
         """优先返回被回复对象（或第一个@对象）的昵称/ID 与头像。
 
         回退顺序：被回复的人 -> 第一个@的 QQ -> 触发者自身。
@@ -223,6 +225,17 @@ class QQGalPlugin(Star):
                             snd = (ret or {}).get("sender", {}) if isinstance(ret, dict) else {}
                             uid = snd.get("user_id") or snd.get("uid") or snd.get("uin")
                             nick = snd.get("card") or snd.get("nickname") or snd.get("nick")
+                            # 如果引用的是机器人的消息，则尝试从消息链里找第一个@的人
+                            if uid and str(uid) == event.get_self_id():
+                                msglist = (ret or {}).get("message") if isinstance(ret, dict) else None
+                                if isinstance(msglist, list):
+                                    for seg in msglist:
+                                        if isinstance(seg, dict) and seg.get("type") == "at":
+                                            qq = (seg.get("data", {}) or {}).get("qq")
+                                            if qq and qq != "all":
+                                                uid = qq
+                                                nick = None
+                                                break
                             if uid:
                                 target_id = str(uid)
                                 target_name = str(nick or uid)
@@ -250,7 +263,7 @@ class QQGalPlugin(Star):
         avatar_tmpl = str(self.cfg().get("avatar_url_tmpl", "https://q1.qlogo.cn/g?b=qq&nk={qq}&s=640"))
         avatar = avatar_tmpl.replace("{qq}", target_id)
         display = f"{target_name} ({target_id})"
-        return display, avatar
+        return display, avatar, target_id
 
     def _pick_background(self) -> str:
         base_dir = os.path.dirname(__file__)
@@ -277,14 +290,297 @@ class QQGalPlugin(Star):
             logger.debug("[qqgal] data_url encode failed: %s", e)
             return ""
 
+    def _get_char_dir(self) -> str:
+        base_dir = os.path.dirname(__file__)
+        dirp = os.path.join(base_dir, "charactert")
+        try:
+            os.makedirs(dirp, exist_ok=True)
+        except Exception:
+            pass
+        return dirp
+
+    def _char_file_for(self, qq: str) -> str:
+        dirp = self._get_char_dir()
+        # 优先使用 png
+        for ext in (".png", ".jpg", ".jpeg", ".webp"):
+            fp = os.path.join(dirp, f"{qq}{ext}")
+            if os.path.exists(fp):
+                return fp
+        return os.path.join(dirp, f"{qq}.png")
+
+    def _char_matte_file_for(self, qq: str) -> str:
+        dirp = self._get_char_dir()
+        return os.path.join(dirp, f"{qq}-matte.png")
+
+    def _load_character_from_disk(self, qq: str) -> tuple[str, bool]:
+        fp = self._char_file_for(qq)
+        if not os.path.exists(fp):
+            return "", False
+        try:
+            mime, _ = mimetypes.guess_type(fp)
+            mime = mime or "image/png"
+            with open(fp, "rb") as f:
+                b64 = base64.b64encode(f.read()).decode("ascii")
+            return f"data:{mime};base64,{b64}", ("png" in (mime or ""))
+        except Exception:
+            return "", False
+
+    def _save_data_url_to_disk(self, data_url: str, qq: str, *, save_as_matte: bool = False) -> str:
+        try:
+            if not data_url.startswith("data:"):
+                return ""
+            head, b64 = data_url.split(",", 1)
+            # 统一转为 PNG 落盘便于后续处理
+            raw = base64.b64decode(b64)
+            from PIL import Image
+            img = Image.open(BytesIO(raw)).convert("RGBA")
+            fp = self._char_matte_file_for(qq) if save_as_matte else self._char_file_for(qq)
+            with open(fp, "wb") as f:
+                buf = BytesIO()
+                img.save(buf, format='PNG')
+                f.write(buf.getvalue())
+            return fp
+        except Exception:
+            return ""
+
+    def _file_to_data_url(self, fp: str) -> str:
+        try:
+            with open(fp, "rb") as f:
+                b64 = base64.b64encode(f.read()).decode("ascii")
+            return f"data:image/png;base64,{b64}"
+        except Exception:
+            return ""
+
+    def _matte_chroma_dataurl(self, data_url: str, chroma: str, tol: int, qq: str) -> tuple[str, bool]:
+        """对 data-url 执行抠色：将接近 chroma 的背景转为透明。
+        - 使用颜色距离阈值（RGB 欧氏距离）以适应压缩/渐变
+        - 对边缘做轻微羽化，减少硬边
+        成功则落盘 qq-matte.png 并返回 data-url；失败回退原图。
+        """
+        try:
+            from PIL import Image, ImageFilter
+            if not data_url.startswith("data:"):
+                return data_url, data_url.startswith("data:image/png")
+            head, b64 = data_url.split(",", 1)
+            base64_bytes = base64.b64decode(b64)
+            img = Image.open(BytesIO(base64_bytes)).convert("RGBA")
+            hx = chroma.lstrip('#')
+            key = tuple(int(hx[i:i+2], 16) for i in (0,2,4))
+
+            # 阈值平方（欧氏距离）
+            thr2 = tol * tol
+            w, h = img.size
+            # 构建抠像遮罩：接近 key 的像素设为 0，其他 255
+            mask = Image.new('L', (w, h), 255)
+            px = img.load()
+            mk = mask.load()
+            for y in range(h):
+                for x in range(w):
+                    r, g, b, a = px[x, y]
+                    dr = r - key[0]
+                    dg = g - key[1]
+                    db = b - key[2]
+                    if (dr*dr + dg*dg + db*db) <= thr2:
+                        mk[x, y] = 0
+            # 羽化边缘，避免硬锯齿
+            mask = mask.filter(ImageFilter.GaussianBlur(1.2))
+            # 应用遮罩到 alpha 通道
+            r, g, b, alpha = img.split()
+            # 将 alpha 与 mask 相乘（mask 越小越透明）
+            alpha = Image.eval(mask, lambda v: min(255, v))
+            img = Image.merge('RGBA', (r, g, b, alpha))
+
+            buf = BytesIO()
+            img.save(buf, format='PNG')
+            b64png = base64.b64encode(buf.getvalue()).decode('ascii')
+            final_url = f"data:image/png;base64,{b64png}"
+            try:
+                self._save_data_url_to_disk(final_url, qq, save_as_matte=True)
+            except Exception:
+                pass
+            return final_url, True
+        except Exception:
+            logger.error("[qqgal-生图] 抠色处理失败(缓存/回退路径)", exc_info=True)
+            return data_url, ("data:image/png" in data_url)
+
+    async def _download_to_b64(self, url: str) -> tuple[str, str]:
+        """下载图片为 base64 与 mime。"""
+        try:
+            async with aiohttp.ClientSession() as sess:
+                async with sess.get(url, timeout=20) as resp:
+                    if resp.status != 200:
+                        return "", ""
+                    data = await resp.read()
+                    ctype = resp.headers.get("Content-Type", "image/jpeg")
+                    return base64.b64encode(data).decode("ascii"), ctype
+        except Exception:
+            return "", ""
+
+    async def _generate_character_image(self, name: str, avatar_url: str, qq: str, force_refresh: bool = False) -> tuple[str, bool]:
+        """调用 Gemini 生成半身像，返回 data-url 与是否透明 PNG。失败返回("", False)。"""
+        cfg = self.cfg()
+        if not bool(cfg.get("enable_character", False)):
+            logger.info("[qqgal-生图] 未启用人物生图，跳过。")
+            return "", False
+        if not force_refresh:
+            # 优先读取 matte 文件
+            matte_fp = self._char_matte_file_for(qq)
+            if os.path.exists(matte_fp):
+                logger.info("[qqgal-生图] 命中抠图缓存，直接使用: %s", matte_fp)
+                return self._file_to_data_url(matte_fp), True
+            cached, is_png = self._load_character_from_disk(qq)
+            if cached:
+                logger.info("[qqgal-生图] 读取本地缓存立绘成功(未抠)，qq=%s，透明PNG=%s，开始补抠。", qq, str(is_png))
+                tol = int(cfg.get("chroma_tolerance", 80))
+                chroma = str(cfg.get("chroma_bg_color", "#00FF00"))
+                processed, is_png2 = self._matte_chroma_dataurl(cached, chroma, tol, qq)
+                return processed, is_png2
+        keys_val = cfg.get("gemini_api_keys", [])
+        api_keys = []
+        if isinstance(keys_val, list):
+            api_keys = [str(k).strip() for k in keys_val if isinstance(k, (str,)) and str(k).strip()]
+        elif isinstance(keys_val, str):
+            api_keys = [k.strip() for k in keys_val.split(",") if k.strip()]
+        if not api_keys:
+            logger.error("[qqgal-生图] 未配置 Gemini API Key，无法生成人物。")
+            return "", False
+        base_url = str(cfg.get("gemini_base_url", "")).strip() or "https://generativelanguage.googleapis.com"
+        model = str(cfg.get("gemini_model", "gemini-2.0-flash-exp"))
+        prompt_tmpl = str(cfg.get("character_prompt", "以 {name} 的头像为参考，生成一位二次元风格的完整半身像角色，面向正前方，透明背景，立绘适合 Galgame 对话立绘使用。"))
+        # 为不透明背景做准备：强制一个易抠图的纯色底
+        chroma = str(cfg.get("chroma_bg_color", "#00FF00"))
+        prompt = (prompt_tmpl.replace("{name}", name) + f"\n背景：{chroma} 纯色背景，人物完整半身像，无遮挡。")
+
+        logger.info("[qqgal-生图] 开始下载头像用于参考，qq=%s，url=%s", qq, avatar_url)
+        b64_avatar, mime_avatar = await self._download_to_b64(avatar_url)
+        if not b64_avatar:
+            logger.error("[qqgal-生图] 下载头像失败，放弃此次生图。")
+            return "", False
+
+        use_legacy = bool(cfg.get("use_legacy_image_endpoint", True))
+        if use_legacy:
+            # 兼容 Canvas 插件风格：直接调用生图端点，通常仅需要文本 prompt 即可
+            legacy_path = str(cfg.get("legacy_image_endpoint", "gemini-2.0-flash-preview-image-generation:generateContent"))
+            endpoint = f"{base_url.rstrip('/')}/v1beta/models/{legacy_path}"
+            req = {
+                "contents": [
+                    {
+                        "role": "user",
+                        "parts": [
+                            {"text": prompt}
+                        ],
+                    },
+                    {
+                        "role": "user",
+                        "parts": [
+                            {"inlineData": {"mimeType": mime_avatar or "image/jpeg", "data": b64_avatar}}
+                        ]
+                    }
+                ],
+                "generationConfig": {
+                    "responseModalities": ["TEXT", "IMAGE"],
+                    "temperature": 0.8,
+                    "topP": 0.95,
+                    "topK": 40,
+                    "maxOutputTokens": 1024
+                }
+            }
+        else:
+            # generateContent + tools（部分反代不支持）
+            endpoint = f"{base_url.rstrip('/')}/v1beta/models/{model}:generateContent"
+            req = {
+                "contents": [
+                    {
+                        "role": "user",
+                        "parts": [
+                            {"text": prompt},
+                            {"inline_data": {"mime_type": mime_avatar or "image/jpeg", "data": b64_avatar}},
+                        ],
+                    }
+                ],
+                "generation_config": {
+                    "temperature": 0.8
+                },
+                "tools": [
+                    {"image_generation": {}}
+                ],
+                "tool_config": {
+                    "image_generation_config": {
+                        "mime_type": "image/png"
+                    }
+                }
+            }
+
+        for idx, key in enumerate(api_keys):
+            try:
+                logger.info("[qqgal-生图] 调用 Gemini，尝试第 %d 个 Key，endpoint=%s，期望输出=PNG", idx + 1, endpoint)
+                async with aiohttp.ClientSession() as sess:
+                    async with sess.post(f"{endpoint}?key={key}", json=req, timeout=60) as resp:
+                        if resp.status != 200:
+                            try:
+                                err_text = await resp.text()
+                            except Exception:
+                                err_text = "<无返回文本>"
+                            logger.error("[qqgal-生图] 接口返回非 200（%d）：%s", resp.status, err_text[:300])
+                            continue
+                        data = await resp.json()
+                        logger.info("[qqgal-生图] 接口请求成功，开始解析返回数据。")
+                        # 兼容多种返回结构，尽力找到内联图片数据（inline_data 或 inlineData）
+                        def find_inline(d: Any):
+                            if isinstance(d, dict):
+                                # both snake_case and camelCase
+                                if (
+                                    ("inline_data" in d and isinstance(d["inline_data"], dict) and "data" in d["inline_data"]) or
+                                    ("inlineData" in d and isinstance(d["inlineData"], dict) and "data" in d["inlineData"])  
+                                ):
+                                    return d.get("inline_data") or d.get("inlineData")
+                                for v in d.values():
+                                    r = find_inline(v)
+                                    if r:
+                                        return r
+                            elif isinstance(d, list):
+                                for it in d:
+                                    r = find_inline(it)
+                                    if r:
+                                        return r
+                            return None
+                        inline = find_inline(data)
+                        if inline and inline.get("data"):
+                            mime = inline.get("mime_type", "image/png")
+                            b64 = inline.get("data")
+                            data_url = f"data:{mime};base64,{b64}"
+                            logger.info("[qqgal-生图] 解析图片成功，mime=%s，长度=%d 字符，准备抠色并写入缓存。", mime, len(b64))
+                            # 1) 先保存原始到 qq.png
+                            raw_fp = self._save_data_url_to_disk(data_url, qq, save_as_matte=False)
+                            # 2) 抠色到 qq-matte.png 并删除 qq.png
+                            tol = int(cfg.get("chroma_tolerance", 80))
+                            chroma = str(cfg.get("chroma_bg_color", "#00FF00"))
+                            matte_url, _ = self._matte_chroma_dataurl(self._file_to_data_url(raw_fp), chroma, tol, qq)
+                            try:
+                                os.remove(raw_fp)
+                            except Exception:
+                                pass
+                            return matte_url, True
+            except Exception:
+                logger.error("[qqgal-生图] 调用 Gemini 发生异常，尝试下一个 Key。", exc_info=True)
+                continue
+        logger.error("[qqgal-生图] 所有 Key 均尝试失败，放弃此次生图。")
+        return "", False
+
     async def _render_image(self, event: AstrMessageEvent, quote: str, options: List[str]) -> str:
         cfg = self.cfg()
         width = int(cfg.get("canvas_width", 1280))
         height = int(cfg.get("canvas_height", 720))
         bg = self._pick_background()
-        name, avatar = await self._get_display_and_avatar(event)
+        name, avatar, target_id = await self._get_display_and_avatar(event)
         # 嵌入为 data URL，避免 file:// 在某些环境不可读/中文路径问题
         bg_url = self._data_url(bg) if bg else ""
+        # 生成半身像（可选）
+        char_url, char_is_png = await self._generate_character_image(name, avatar, qq=target_id, force_refresh=False)
+        if char_url:
+            logger.info("[qqgal-生图] 立绘生成/读取成功，准备合成，PNG=%s", str(char_is_png))
+        else:
+            logger.info("[qqgal-生图] 未添加立绘（未启用/失败/无Key/缓存缺失）。")
 
         # 选项纵向位置（保持既有结构）
         opt1_top = int(height * 0.20)
@@ -315,17 +611,19 @@ class QQGalPlugin(Star):
   body {{ margin:0; width:{width}px; height:{height}px; font-family: 'Microsoft Yahei', sans-serif; }}
   .root {{ position:relative; width:{width}px; height:{height}px; background:#000; overflow:hidden; }}
   /* 两层背景：底层模糊铺满，顶层等比完整展示，保证任意比例都好看 */
-  .bg-blur {{ position:absolute; inset:0; background-image:url('{bg_url}'); background-size:cover; background-position:center; filter:blur(18px) brightness(0.7); transform:scale(1.06); }}
-  .bg-main {{ position:absolute; inset:0; background-image:url('{bg_url}'); background-repeat:no-repeat; background-size:contain; background-position:center; }}
+  .bg-blur {{ position:absolute; inset:0; background-image:url('{bg_url}'); background-size:cover; background-position:center; filter:blur(18px) brightness(0.7); transform:scale(1.06); z-index:0; }}
+  .bg-main {{ position:absolute; inset:0; background-image:url('{bg_url}'); background-repeat:no-repeat; background-size:contain; background-position:center; z-index:0; }}
   .topbar {{ position:absolute; left:24px; top:18px; color:#fff; font-weight:700; letter-spacing:1px; text-shadow:0 2px 6px rgba(0,0,0,.6); }}
   :root {{ --quote-width: {quote_w}px; }}
+  /* 人物立绘：底部居中，宽度按比例缩放 */
+  .char {{ position:absolute; left:calc(50% + {int(cfg.get('character_x_offset', 0))}px); transform:translateX(-50%); bottom:{int(cfg.get('character_bottom_offset', 40))}px; width:{int(width*float(cfg.get('character_scale', 0.42)))}px; height:auto; object-fit:contain; {'' if char_is_png else 'mix-blend-mode: multiply;'} filter: drop-shadow(0 8px 24px rgba(0,0,0,.45)); opacity:{1.0 if char_url else 0}; z-index: 1; pointer-events:none; }}
   /* 引用内容容器：自身不加毛玻璃，由下方 .glass 提供延伸到底部的模糊背景 */
-  .quote {{ position:absolute; left:50%; transform:translateX(-50%); top:{quote_top}px; width:var(--quote-width); padding:18px 22px 22px 22px; color:#fff; font-size:28px; font-weight:800; line-height:1.5; border-radius:16px; background:transparent; text-align:center; }}
-  .glass {{ position:absolute; left:{glass_left}px; top:{glass_top}px; width:{glass_w}px; height:{glass_h}px; background:rgba(0,0,0,.25); backdrop-filter: blur(10px); border-radius:18px; box-shadow:0 10px 30px rgba(0,0,0,.35); }}
-  .q-avatar {{ position:absolute; left:16px; top:16px; width:56px; height:56px; border-radius:50%; border:2px solid rgba(255,255,255,.8); background-image:url('{avatar}'); background-size:cover; background-position:center; box-shadow:0 4px 12px rgba(0,0,0,.4); }}
-  .q-user {{ position:absolute; left:88px; top:22px; font-size:22px; font-weight:800; color:#fff; text-shadow:0 2px 6px rgba(0,0,0,.6); }}
-  .q-text {{ margin-top:88px; font-size:32px; font-weight:900; color:#fff; text-align:center; line-height:1.6; }}
-  .option {{ position:absolute; left:50%; transform:translateX(-50%); width:{int(width*0.7)}px; padding:14px 18px; background:rgba(0,0,0,.55); color:#f0f0f0; border-radius:28px; text-align:center; font-size:26px; font-weight:800; letter-spacing:1px; box-shadow:0 8px 20px rgba(0,0,0,.35); border:1px solid rgba(255,255,255,.15); }}
+  .quote {{ position:absolute; left:50%; transform:translateX(-50%); top:{quote_top}px; width:var(--quote-width); padding:18px 22px 22px 22px; color:#fff; font-size:28px; font-weight:800; line-height:1.5; border-radius:16px; background:transparent; text-align:center; z-index:3; }}
+  .glass {{ position:absolute; left:{glass_left}px; top:{glass_top}px; width:{glass_w}px; height:{glass_h}px; background:rgba(0,0,0,.25); backdrop-filter: blur(10px); border-radius:18px; box-shadow:0 10px 30px rgba(0,0,0,.35); z-index:2; }}
+  .q-avatar {{ position:absolute; left:16px; top:16px; width:56px; height:56px; border-radius:50%; border:2px solid rgba(255,255,255,.8); background-image:url('{avatar}'); background-size:cover; background-position:center; box-shadow:0 4px 12px rgba(0,0,0,.4); z-index:3; }}
+  .q-user {{ position:absolute; left:88px; top:22px; font-size:22px; font-weight:800; color:#fff; text-shadow:0 2px 6px rgba(0,0,0,.6); z-index:3; }}
+  .q-text {{ margin-top:88px; font-size:32px; font-weight:900; color:#fff; text-align:center; line-height:1.6; z-index:3; position:relative; }}
+  .option {{ position:absolute; left:50%; transform:translateX(-50%); width:{int(width*0.7)}px; padding:14px 18px; background:rgba(0,0,0,.55); color:#f0f0f0; border-radius:28px; text-align:center; font-size:26px; font-weight:800; letter-spacing:1px; box-shadow:0 8px 20px rgba(0,0,0,.35); border:1px solid rgba(255,255,255,.15); z-index:3; }}
   /* 将选项整体上移，集中在画面上 2/5 区域附近 */
   .opt1 {{ top:{opt1_top}px; }}
   .opt2 {{ top:{opt2_top}px; }}
@@ -338,6 +636,7 @@ class QQGalPlugin(Star):
     <div class='bg-blur'></div>
     <div class='bg-main'></div>
     <div class='topbar'>CHAPTER</div>
+    <img class='char' src='{char_url}' />
     <div class='glass'></div>
     <div class='quote'>
       <div class='q-avatar'></div>
@@ -417,6 +716,26 @@ class QQGalPlugin(Star):
         except Exception as e:
             logger.error(f"生成选项失败: {e}")
             yield event.plain_result("生成选项失败，请稍后重试。")
+
+    @filter.command("刷新立绘")
+    async def refresh_character(self, event: AstrMessageEvent):
+        try:
+            # 解析目标：若引用他人，则仅允许自己=被引用人
+            _, avatar_url, target_id = await self._get_display_and_avatar(event)
+            sender_id = event.get_sender_id()
+            if target_id != sender_id:
+                yield event.plain_result("仅可刷新自己立绘")
+                return
+            name = event.get_sender_name() or sender_id
+            # 强制刷新并缓存
+            data_url, _ = await self._generate_character_image(name, avatar_url, qq=target_id, force_refresh=True)
+            if data_url:
+                yield event.plain_result("已刷新你的立绘~")
+            else:
+                yield event.plain_result("刷新失败，请检查 Key/网络后再试。")
+        except Exception as e:
+            logger.error(f"刷新立绘失败: {e}")
+            yield event.plain_result("刷新失败，请稍后重试。")
 
     @filter.event_message_type(filter.EventMessageType.ALL)
     async def _fallback_any(self, event: AstrMessageEvent):

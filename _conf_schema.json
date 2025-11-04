@@ -43,10 +43,87 @@
     "type": "string",
     "default": "background"
   },
+  "quote_font_size": {
+    "description": "引用文字字号(px)",
+    "type": "int",
+    "default": 34
+  },
   "avatar_url_tmpl": {
     "description": "头像 URL 模板（用 {qq} 占位符替换为 QQ 号）",
     "type": "string",
     "default": "https://q1.qlogo.cn/g?b=qq&nk={qq}&s=640"
+  },
+
+  "enable_character": {
+    "description": "启用立绘（自动生图+抠图+叠加）",
+    "type": "bool",
+    "default": true,
+    "obvious_hint": true
+  },
+  "gemini_base_url": {
+    "description": "Gemini API 基地址（留空使用官方 https://generativelanguage.googleapis.com）",
+    "type": "string",
+    "default": ""
+  },
+  "gemini_model": {
+    "description": "Gemini 生图模型名",
+    "type": "string",
+    "default": "gemini-2.0-flash-exp"
+  },
+  "use_legacy_image_endpoint": {
+    "description": "使用 Gemini 原生生图端点",
+    "type": "bool",
+    "default": true
+  },
+  "legacy_image_endpoint": {
+    "description": "生图端点路径(模型+方法)，与反代保持一致",
+    "type": "string",
+    "default": "gemini-2.0-flash-preview-image-generation:generateContent"
+  },
+  
+  "gemini_api_keys": {
+    "description": "Gemini API Key 列表（逐项填写，自动轮询）",
+    "type": "list",
+    "items": {
+      "type": "string",
+      "description": "API Key"
+    },
+    "default": []
+  },
+  "character_prompt": {
+    "description": "人物生成提示词（支持 {name} 占位符）",
+    "type": "text",
+    "default": "以 {name} 的头像为参考，生成二次元风格完整半身像，比例1:1，1024*1024像素，肩部几乎接近画布边缘，在接近中部，头部在上1/2处，底部到腰，面向正前方，若用户输入的头像不是人物，则将其“娘化”，亮绿色纯色背景，适合 Galgame 对话立绘。"
+  },
+  "matting_mode": {
+    "description": "当返回非 PNG 时的融合方式（none/multiply）",
+    "type": "string",
+    "default": "multiply"
+  },
+  "chroma_bg_color": {
+    "description": "生图背景抠图的纯色（hex，如 #00FF00 纯绿）",
+    "type": "string",
+    "default": "#00FF00"
+  },
+  "chroma_tolerance": {
+    "description": "抠图颜色容差(0-255，越大越宽松)",
+    "type": "int",
+    "default": 80
+  },
+  "character_scale": {
+    "description": "人物宽度占画布比例（0.1~1.0）",
+    "type": "float",
+    "default": 0.42
+  },
+  "character_bottom_offset": {
+    "description": "人物底部距离画布底边(px)",
+    "type": "int",
+    "default": 0
+  },
+  "character_x_offset": {
+    "description": "人物水平偏移量(px，正值向右，负值向左)",
+    "type": "int",
+    "default": -300
   },
 
   "prompt_template": {
