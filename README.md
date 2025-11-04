@@ -1,60 +1,56 @@
-# astrbot_plugin_qqgal 🎮（点个star谢谢喵）
+# astrbot_plugin_qqgal v2.0.0 🎮
 
-GalGame 风格“选项生成 + 图片渲染”插件（AstrBot 框架，Napcat/OneBot11 测试通过）。
+基于 AstrBot 的 GalGame 风格“选项生成 + 图片渲染 + 立绘叠加”插件（Napcat/OneBot11 测试通过）。
 
-⚠️正在优化渲染和提示词，目前正常使用但有些简陋
-> 将聊天中的“引用消息”作为语境，调用 AstrBot 已配置的大模型生成 A/B/C… 选项，并以 GalGame UI 风格渲染为图片：
-<img width="426" height="414" alt="image" src="https://github.com/user-attachments/assets/815b9756-8955-469c-847a-3b9f55f5e468" />
+> 在聊天中“引用消息”作为语境，生成 A/B/C… 多分支选项，并渲染为 Gal UI 图片；支持自动生成人物立绘、抠色并叠加到背景。
+![6f0b057fd7b4d9e2b118aab88cc1bff6](https://github.com/user-attachments/assets/eae2a831-ebff-4e3b-9e3e-ef071278faa3)
 
-![6b7969fe97e8fd271e9357f09a1a5624](https://github.com/user-attachments/assets/8d914ddb-a6d6-4388-bc50-821bea0e1c70)
-## 功能特性 ✨
-- 生成 GalGame 风格的下一步选项（数量可自定义）。
-- 自动识别“被回复者/第一个@对象”的头像与昵称。
-- 双层背景：模糊铺底 + 等比居中，适配任意比例图片。
-- 引用区域毛玻璃自引用顶端向下覆盖到底部，视觉层级更清晰。
-- 可配置图片质量、画布大小、默认选项数、提示模板等。
-
-提示：开发与验证基于 AstrBot，协议端以 Napcat(OneBot 11) 测试通过；其它实现未做适配验证。
+## 新特性（2.0.0）
+- 新增自动生图 + 抠色：
+  - 使用被引用对象头像作为参考，调用 Gemini 原生端点生成立绘；
+  - 生图背景为亮绿纯色（可配），本地欧氏距离阈值 + 羽化边缘抠色，产出透明 PNG；
+  - 立绘缓存：`charactert/QQ-matte.png`，下次直接复用。
+- 结构与层级优化：背景 < 立绘 < 玻璃层 < 文本；引用区与头像昵称清晰可见。
+- 配置项精简：启用立绘（默认开）、Key 列表、反代地址、抠色参数与立绘位置即可。
 
 ## 指令 🗂️
 - `/选项 [数量]`
 - 别名：`/gal`、`/gal选项`、`选项`
 
 说明：
-- 若指令后直接跟文本，优先使用该文本作为语境；
-- 若为“引用消息”，会读取被回复消息文本作为语境；
-- 未给出数量时使用默认值（见配置）。
+- 指令后文本优先作为语境；若是“引用消息”，读取被回复文本作为语境；
+- 未给数量时使用默认值（见配置）。
 
 ## 安装与使用 🚀
-1. 安装 AstrBot（参考官方文档）。
-2. 将本项目放入 `AstrBot/data/plugins/astrbot_plugin_qqgal/` 目录。
-3. 在 AstrBot WebUI → 插件管理 中启用插件并配置参数。
+1. 安装 AstrBot。
+2. 将仓库放入 `AstrBot/data/plugins/astrbot_plugin_qqgal/`。
+3. WebUI → 插件管理：启用并填写 Key、反代地址等。
 4. 协议端推荐 Napcat（OneBot 11）。
-5. 在群聊/私聊中直接使用上述指令，或先引用消息再发送指令。
+
+## 配置要点 📋
+- 立绘：`enable_character`（默认开）
+- Key：`gemini_api_keys`（列表，多 Key 轮询）
+- 反代：`gemini_base_url`（空则走官方）
+- 抠色：`chroma_bg_color`（默认 #00FF00）、`chroma_tolerance`（默认 80）
+- 位置尺寸：`character_scale`、`character_bottom_offset`、`character_x_offset`
 
 ## 资源（背景图） 🖼️
-- 在插件目录下的 `background/` 放入图片（支持 `jpg/jpeg/png/webp`）。
-- 渲染时随机选择一张：
-  - 底层：`cover + blur` 铺满；
-  - 顶层：`contain` 等比居中，不拉伸。
-
-## 配置 📋
-所有配置项可在 AstrBot WebUI → 插件管理 中查看与修改（含图片质量、画布大小、默认选项数、提示模板、背景目录等）。
+- 将图片放入 `background/`；渲染时随机选择：
+  - 底层：`cover+blur` 铺满；
+  - 顶层：`contain` 等比居中。
 
 ## 工作流程 🧭
-1. 提取语境（指令后文本 > 被引用消息 > 空）。
-2. 调用 AstrBot Provider 生成 A/B/C… 选项并规范化输出。
-3. 若开启图片渲染：渲染背景与 UI 元素，引用区域毛玻璃自顶端延伸到底部，并返回图片。
+1. 提取语境（文本/引用）。
+2. 生成并规范化选项。
+3. 生图（可选）→ 抠色 → 写入 `QQ-matte.png` → 叠加立绘 → 合成输出。
 
 ## 兼容性 🔌
 - 框架：AstrBot
-- 协议端：Napcat（OneBot 11）已测试
-- 其它 OneBot 实现：未验证
+- 协议端：Napcat（OneBot 11）
 
 ## 许可 📄
-仅用于学习交流。放入的背景图片请确保拥有相应版权或授权。
+仅用于学习交流，请确保背景/头像素材的版权或授权。
 
 ## 致谢 🙏
 - AstrBot 项目与社区
 - Napcat / OneBot 生态
- 
