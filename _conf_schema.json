@@ -108,7 +108,7 @@
   "chroma_tolerance": {
     "description": "抠图颜色容差(0-255，越大越宽松)",
     "type": "int",
-    "default": 80
+    "default": 100
   },
   "character_scale": {
     "description": "人物宽度占画布比例（0.1~1.0）",
@@ -150,3 +150,4 @@
     "default": true
   }
 }
+
