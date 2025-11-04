@@ -13,7 +13,7 @@ import aiohttp
 from io import BytesIO
 
 
-@register("astrbot_plugin_qqgal", "bvzrays", "引用文本生成 GalGame 风格选项", "1.0.0")
+@register("astrbot_plugin_qqgal", "bvzrays", "引用文本生成 GalGame 风格选项", "2.0.0")
 class QQGalPlugin(Star):
     def __init__(self, context: Context, config=None):
         super().__init__(context)
