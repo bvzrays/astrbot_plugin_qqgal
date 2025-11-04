@@ -417,16 +417,17 @@ class QQGalPlugin(Star):
         if not bbox:
             return data_url
         crop = img.crop(bbox)
-        # 等比放大到与画布等宽
-        target_w = size
-        scale = target_w / max(1, crop.width)
+        # 从底部往上等比放大：尽可能大但不裁切（contain），
+        # 当任意边触达画布边框时停止放大。
+        scale = min(size / max(1, crop.width), size / max(1, crop.height))
+        new_w = max(1, int(crop.width * scale))
         new_h = max(1, int(crop.height * scale))
-        crop = crop.resize((target_w, new_h), Image.LANCZOS)
+        crop = crop.resize((new_w, new_h), Image.LANCZOS)
         # 粘贴到标准画布
         canvas = Image.new('RGBA', (size, size), (0,0,0,0))
-        x = 0
-        # 底部对齐：允许 y 为负，顶部超出的部分被裁切
-        y = size - new_h - int(bottom_pad or 0)
+        x = (size - new_w) // 2
+        # 底部对齐，不裁切
+        y = max(0, size - new_h - int(bottom_pad or 0))
         canvas.paste(crop, (x, y), crop)
         buf = BytesIO()
         canvas.save(buf, format='PNG')
