@@ -400,7 +400,11 @@ class QQGalPlugin(Star):
             return data_url, ("data:image/png" in data_url)
 
     def _standardize_character_canvas_sync(self, data_url: str, size: int, width_ratio: float, bottom_pad: int, qq: str) -> str:
-        """将抠好的人物立绘标准化到 size×size 透明画布中，水平居中，顶端对齐（人物最上缘贴近画布顶边），宽度占比为 width_ratio。
+        """将抠好的人物立绘标准化到 size×size 透明画布中：
+        - 等比放大到“左右对齐”（宽度=画布宽度），
+        - 水平居中（自然为 0），
+        - 底部对齐（人物底边贴近画布底边，允许上方溢出被裁切），
+        以确保不同原图比例得到一致的最终合成尺寸。
         返回 data-url，并覆盖到 qq-matte.png。
         """
         from PIL import Image
@@ -413,21 +417,16 @@ class QQGalPlugin(Star):
         if not bbox:
             return data_url
         crop = img.crop(bbox)
-        # 目标缩放
-        target_w = max(1, int(size * max(0.1, min(0.95, width_ratio))))
-        scale = target_w / crop.width
+        # 等比放大到与画布等宽
+        target_w = size
+        scale = target_w / max(1, crop.width)
         new_h = max(1, int(crop.height * scale))
-        # 若高度超过画布，则以高度为准等比缩小，避免溢出
-        if new_h > size:
-            scale = size / crop.height
-            target_w = max(1, int(crop.width * scale))
-            new_h = size
         crop = crop.resize((target_w, new_h), Image.LANCZOS)
         # 粘贴到标准画布
         canvas = Image.new('RGBA', (size, size), (0,0,0,0))
-        x = (size - target_w) // 2
-        # 顶端对齐：人物最上缘贴近画布顶部
-        y = 0
+        x = 0
+        # 底部对齐：允许 y 为负，顶部超出的部分被裁切
+        y = size - new_h - int(bottom_pad or 0)
         canvas.paste(crop, (x, y), crop)
         buf = BytesIO()
         canvas.save(buf, format='PNG')
