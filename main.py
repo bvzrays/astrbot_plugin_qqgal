@@ -399,6 +399,39 @@ class QQGalPlugin(Star):
             logger.error("[qqgal-生图] 抠色处理失败(缓存/回退路径)", exc_info=True)
             return data_url, ("data:image/png" in data_url)
 
+    def _standardize_character_canvas_sync(self, data_url: str, size: int, width_ratio: float, bottom_pad: int, qq: str) -> str:
+        """将抠好的人物立绘标准化到 size×size 透明画布中，水平居中，底部对齐 bottom_pad，宽度占比为 width_ratio。
+        返回 data-url，并覆盖到 qq-matte.png。
+        """
+        from PIL import Image
+        if not data_url.startswith("data:"):
+            return data_url
+        head, b64 = data_url.split(",", 1)
+        img = Image.open(BytesIO(base64.b64decode(b64))).convert("RGBA")
+        # 取非透明 bbox
+        bbox = img.split()[3].getbbox()
+        if not bbox:
+            return data_url
+        crop = img.crop(bbox)
+        # 目标缩放
+        target_w = max(1, int(size * max(0.1, min(0.95, width_ratio))))
+        scale = target_w / crop.width
+        new_h = max(1, int(crop.height * scale))
+        crop = crop.resize((target_w, new_h), Image.LANCZOS)
+        # 粘贴到标准画布
+        canvas = Image.new('RGBA', (size, size), (0,0,0,0))
+        x = (size - target_w) // 2
+        y = max(0, size - bottom_pad - new_h)
+        canvas.paste(crop, (x, y), crop)
+        buf = BytesIO()
+        canvas.save(buf, format='PNG')
+        url = f"data:image/png;base64,{base64.b64encode(buf.getvalue()).decode('ascii')}"
+        try:
+            self._save_data_url_to_disk(url, qq, save_as_matte=True)
+        except Exception:
+            pass
+        return url
+
     async def _download_to_b64(self, url: str) -> tuple[str, str]:
         """下载图片为 base64 与 mime。"""
         try:
@@ -552,6 +585,17 @@ class QQGalPlugin(Star):
                             tol = int(cfg.get("chroma_tolerance", 80))
                             chroma = str(cfg.get("chroma_bg_color", "#00FF00"))
                             matte_url, _ = await self._matte_chroma_dataurl(self._file_to_data_url(raw_fp), chroma, tol, qq)
+                            # 立绘标准化：固定到方形画布，确保位置与大小一致
+                            std_size = int(cfg.get('character_canvas_size', 1024))
+                            target_ratio = float(cfg.get('character_target_width_ratio', 0.55))
+                            matte_url = await asyncio.to_thread(
+                                self._standardize_character_canvas_sync,
+                                matte_url,
+                                std_size,
+                                target_ratio,
+                                0,
+                                qq,
+                            )
                             try:
                                 os.remove(raw_fp)
                             except Exception:
