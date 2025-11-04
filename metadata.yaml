@@ -1,6 +1,6 @@
 name: astrbot_plugin_qqgal
-display_name: Gal 风格选项生成
-desc: 引用或跟随一段文本，调用 LLM 生成 GalGame 风格的多分支选项；支持供应商/模型/数量范围/标题与分隔线配置。
+display_name: Gal 风格图片生成
+desc: 引用或跟随文本生成 GalGame 风格选项，支持图片渲染、自动生图+抠图叠加立绘。
 version: v2.0.0
 author: bvzrays
 repo: https://github.com/bvzrays/astrbot_plugin_qqgal
