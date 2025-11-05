@@ -3,6 +3,7 @@
 
 > 在聊天中“引用消息”作为语境，生成 A/B/C… 多分支选项，并渲染为 Gal UI 图片；支持自动生成人物立绘、抠色并叠加到背景。
 ![6f0b057fd7b4d9e2b118aab88cc1bff6](https://github.com/user-attachments/assets/eae2a831-ebff-4e3b-9e3e-ef071278faa3)
+<img width="406" height="624" alt="image" src="https://github.com/user-attachments/assets/17f93a7d-5d64-4e25-aba9-169d1ebb78b6" />
 
 ## 新特性（2.0.0）
 - 新增自动生图 + 抠色：
